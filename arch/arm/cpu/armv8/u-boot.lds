@@ -154,7 +154,7 @@ SECTIONS
 	/*
 	 * arch/arm/lib/crt0_64.S assumes __bss_start - __bss_end % 8 == 0
 	 */
-	.bss ADDR(.rela.dyn) (NOLOAD) : {
+	.bss ADDR(.rela.dyn) (OVERLAY) : {
 		__bss_start = .;
 		*(.bss*)
 		. = ALIGN(8);
