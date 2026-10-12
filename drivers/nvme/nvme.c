@@ -17,8 +17,6 @@
 #include <linux/compat.h>
 #include "nvme.h"
 
-#define NVME_Q_DEPTH		2
-#define NVME_AQ_DEPTH		2
 #define NVME_SQ_SIZE(depth)	(depth * sizeof(struct nvme_command))
 #define NVME_CQ_SIZE(depth)	(depth * sizeof(struct nvme_completion))
 #define NVME_CQ_ALLOCATION	ALIGN(NVME_CQ_SIZE(NVME_Q_DEPTH), \
@@ -555,6 +553,7 @@ int nvme_set_features(struct nvme_dev *dev, unsigned fid, unsigned dword11,
 static int nvme_create_queue(struct nvme_queue *nvmeq, int qid)
 {
 	struct nvme_dev *dev = nvmeq->dev;
+	struct nvme_ops *ops;
 	int result;
 
 	nvmeq->cq_vector = qid - 1;
@@ -565,6 +564,10 @@ static int nvme_create_queue(struct nvme_queue *nvmeq, int qid)
 	result = nvme_alloc_sq(dev, qid, nvmeq);
 	if (result < 0)
 		goto release_cq;
+
+	ops = (struct nvme_ops *)dev->udev->driver->ops;
+	if (ops && ops->queue_created)
+		ops->queue_created(nvmeq);
 
 	nvme_init_queue(nvmeq, qid);
 

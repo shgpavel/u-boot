@@ -21,6 +21,8 @@
 #define  REG_CPU_CTRL_RUN	BIT(4)
 
 /* Apple NVMe registers */
+#define ANS_IOSQ_BASE		0x01200
+#define ANS_IOCQ_BASE		0x01208
 #define ANS_MAX_PEND_CMDS_CTRL	0x01210
 #define  ANS_MAX_QUEUE_DEPTH	64
 #define ANS_BOOT_STATUS		0x01300
@@ -63,7 +65,9 @@ struct ans_nvmmu_tcb {
 struct apple_nvme_priv {
 	struct nvme_dev ndev;
 	void *base;		/* NVMe registers */
+	void *nvmmu;
 	void *asc;		/* ASC registers */
+	bool ioq_regs;
 	struct reset_ctl_bulk resets; /* ASC reset */
 	struct mbox_chan chan;
 	struct apple_sart *sart;
@@ -97,13 +101,13 @@ static int apple_nvme_setup_queue(struct nvme_queue *nvmeq)
 		priv->q_db[nvmeq->qid] =
 			((void __iomem *)dev->bar) + ANS_ASQ_DB;
 		nvme_writeq((ulong)priv->tcbs[nvmeq->qid],
-			    ((void __iomem *)dev->bar) + ANS_NVMMU_BASE_ASQ);
+			    priv->nvmmu + ANS_NVMMU_BASE_ASQ);
 		break;
 	case NVME_IO_Q:
 		priv->q_db[nvmeq->qid] =
 			((void __iomem *)dev->bar) + ANS_IOSQ_DB;
 		nvme_writeq((ulong)priv->tcbs[nvmeq->qid],
-			    ((void __iomem *)dev->bar) + ANS_NVMMU_BASE_IOSQ);
+			    priv->nvmmu + ANS_NVMMU_BASE_IOSQ);
 		break;
 	}
 
@@ -148,12 +152,24 @@ static void apple_nvme_complete_cmd(struct nvme_queue *nvmeq,
 
 	tcb = ((void *)priv->tcbs[nvmeq->qid]) + tail * ANS_NVMMU_TCB_PITCH;
 	memset(tcb, 0, sizeof(*tcb));
-	writel(tail, ((void __iomem *)nvmeq->dev->bar) + ANS_NVMMU_TCB_INVAL);
-	readl(((void __iomem *)nvmeq->dev->bar) + ANS_NVMMU_TCB_STAT);
+	writel(tail, priv->nvmmu + ANS_NVMMU_TCB_INVAL);
+	readl(priv->nvmmu + ANS_NVMMU_TCB_STAT);
 
 	if (++tail == nvmeq->q_depth)
 		tail = 0;
 	nvmeq->sq_tail = tail;
+}
+
+static void apple_nvme_queue_created(struct nvme_queue *nvmeq)
+{
+	struct apple_nvme_priv *priv =
+		container_of(nvmeq->dev, struct apple_nvme_priv, ndev);
+
+	if (!priv->ioq_regs || nvmeq->qid != NVME_IO_Q)
+		return;
+
+	nvme_writeq((ulong)nvmeq->cqes, priv->base + ANS_IOCQ_BASE);
+	nvme_writeq((ulong)nvmeq->sq_cmds, priv->base + ANS_IOSQ_BASE);
 }
 
 static int nvme_shmem_setup(void *cookie, struct apple_rtkit_buffer *buf)
@@ -200,12 +216,17 @@ static int apple_nvme_probe(struct udevice *dev)
 	struct apple_nvme_priv *priv = dev_get_priv(dev);
 	fdt_addr_t addr;
 	ofnode of_sart;
-	u32 ctrl, stat, phandle;
+	u32 ctrl, stat, phandle, pend;
 	int ret;
 
 	priv->base = dev_read_addr_ptr(dev);
 	if (!priv->base)
 		return -EINVAL;
+
+	priv->nvmmu = dev_read_addr_name_ptr(dev, "nvmmu");
+	if (!priv->nvmmu)
+		priv->nvmmu = priv->base;
+	priv->ioq_regs = dev_get_driver_data(dev);
 
 	addr = dev_read_addr_index(dev, 1);
 	if (addr == FDT_ADDR_T_NONE)
@@ -251,13 +272,13 @@ static int apple_nvme_probe(struct udevice *dev)
 	}
 
 	writel(ANS_LINEAR_SQ_CTRL_EN, priv->base + ANS_LINEAR_SQ_CTRL);
-	writel(((ANS_MAX_QUEUE_DEPTH << 16) | ANS_MAX_QUEUE_DEPTH),
-	       priv->base + ANS_MAX_PEND_CMDS_CTRL);
+	pend = priv->ioq_regs ? NVME_Q_DEPTH - 1 : ANS_MAX_QUEUE_DEPTH;
+	writel((pend << 16) | pend, priv->base + ANS_MAX_PEND_CMDS_CTRL);
 
 	strcpy(priv->ndev.vendor, "Apple");
 
 	writel((ANS_NVMMU_TCB_SIZE / ANS_NVMMU_TCB_PITCH) - 1,
-	       priv->base + ANS_NVMMU_NUM);
+	       priv->nvmmu + ANS_NVMMU_NUM);
 	writel(0, priv->base + ANS_MODESEL);
 
 	priv->ndev.bar = priv->base;
@@ -292,11 +313,13 @@ static const struct nvme_ops apple_nvme_ops = {
 	.setup_queue = apple_nvme_setup_queue,
 	.submit_cmd = apple_nvme_submit_cmd,
 	.complete_cmd = apple_nvme_complete_cmd,
+	.queue_created = apple_nvme_queue_created,
 };
 
 static const struct udevice_id apple_nvme_ids[] = {
 	{ .compatible = "apple,t8103-nvme-ans2" },
 	{ .compatible = "apple,nvme-ans2" },
+	{ .compatible = "apple,t8132-nvme-ans2", .data = true },
 	{ /* sentinel */ }
 };
 

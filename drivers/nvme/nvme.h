@@ -664,6 +664,9 @@ struct nvme_ns {
 	u8 flbas;
 };
 
+#define NVME_Q_DEPTH		2
+#define NVME_AQ_DEPTH		2
+
 struct nvme_ops {
 	/**
 	 * setup_queue - Controller-specific NVM Express queue setup.
@@ -689,6 +692,7 @@ struct nvme_ops {
 	 * @cmd:   NVM Express command
 	 */
 	void (*complete_cmd)(struct nvme_queue *nvmeq, struct nvme_command *cmd);
+	void (*queue_created)(struct nvme_queue *nvmeq);
 };
 
 /**
