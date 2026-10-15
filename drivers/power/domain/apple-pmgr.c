@@ -8,6 +8,7 @@
 #include <dm/device-internal.h>
 #include <linux/err.h>
 #include <linux/bitfield.h>
+#include <linux/delay.h>
 #include <power-domain-uclass.h>
 #include <reset-uclass.h>
 #include <regmap.h>
@@ -28,6 +29,7 @@
 #define APPLE_PMGR_PS_PWRGATE	0x0
 
 #define APPLE_PMGR_PS_SET_TIMEOUT_US	100
+#define APPLE_PMGR_RESET_TIME_US	10
 
 struct apple_pmgr_priv {
 	struct regmap *regmap;
@@ -53,6 +55,7 @@ static int apple_reset_assert(struct reset_ctl *reset_ctl)
 	regmap_update_bits(priv->regmap, priv->offset,
 			   APPLE_PMGR_FLAGS | APPLE_PMGR_RESET,
 			   APPLE_PMGR_RESET);
+	udelay(APPLE_PMGR_RESET_TIME_US);
 
 	return 0;
 }
